@@ -1,7 +1,6 @@
 package proc
 
 import (
-	"reflect"
 	"testing"
 	"time"
 )
@@ -95,6 +94,95 @@ func TestChannelProcessor_Update(t *testing.T) {
 	}
 }
 
+func TestChannelProcessor_SetTtl(t *testing.T) {
+	var (
+		cp  *ChannelProcessor
+		err error
+	)
+	cp = NewChannelProcessor(1000000000)
+	cp.Start()
+	defer cp.Stop()
+	err = cp.SetTtl(`foo`, 1)
+	if err == nil {
+		t.Error(`No error on inexisting value TTL set`)
+	}
+	err = cp.Create(`foo`, `bar`)
+	if err != nil {
+		t.Error(`Error on value creation`)
+	}
+	err = cp.SetTtl(`foo`, `meeeeooowww`)
+	if err == nil {
+		t.Error(`No error on incorrect TTL set`)
+	}
+	err = cp.SetTtl(`foo`, `10s`)
+	if err != nil {
+		t.Errorf(`Error on existing value correct TTL set with time string, got %#v`, err)
+	}
+	// a great opportunity of tests stored in the same package, other way is to have additional exposed method
+	if cp.store[`foo`].Ttl != time.Second*10 {
+		t.Errorf(`Incorrect TTL set with time string, got %#v`, cp.store[`foo`].Ttl)
+	}
+	err = cp.SetTtl(`foo`, `1`)
+	if err != nil {
+		t.Errorf(`Error on existing value correct TTL set with digit-only string, got %#v`, err)
+	}
+	if cp.store[`foo`].Ttl != time.Second {
+		t.Errorf(`Incorrect TTL set with digit-only string, got %#v`, cp.store[`foo`].Ttl)
+	}
+	err = cp.SetTtl(`foo`, time.Millisecond)
+	if err != nil {
+		t.Errorf(`Error on existing value correct TTL set with integer, got %#v`, err)
+	}
+	if cp.store[`foo`].Ttl != time.Millisecond {
+		t.Errorf(`Incorrect TTL set with integer, got %#v`, cp.store[`foo`].Ttl)
+	}
+	v, err := cp.Get(`foo`)
+	if err != nil {
+		t.Error(`Error on value get`)
+	}
+	if v.(string) != `bar` {
+		t.Error(`Incorrect value returned`)
+	}
+	time.Sleep(time.Millisecond * 2)
+	v, err = cp.Get(`foo`)
+	if err == nil {
+		t.Error(`Error on outdated value get`)
+	}
+}
+
+func TestChannelProcessor_Remove(t *testing.T) {
+	var (
+		cp  *ChannelProcessor
+		err error
+	)
+	cp = NewChannelProcessor(1000000000)
+	cp.Start()
+	defer cp.Stop()
+	err = cp.Create(`foo`, `bar`)
+	if err != nil {
+		t.Error(`Error on value creation`)
+	}
+	err = cp.Create(`meeeeeow`, `mooooo`)
+	if err != nil {
+		t.Error(`Error on value creation`)
+	}
+	v, err := cp.Get(`foo`)
+	if err != nil {
+		t.Error(`Error on value get`)
+	}
+	if v.(string) != `bar` {
+		t.Error(`Incorrect value returned`)
+	}
+	err = cp.Remove(`foo`)
+	if err != nil {
+		t.Error(`Error on Remove existing key`)
+	}
+	v, err = cp.Get(`foo`)
+	if err == nil {
+		t.Error(`Did not remove key`)
+	}
+}
+
 func TestChannelProcessor_KeyList(t *testing.T) {
 	var (
 		cp  *ChannelProcessor
@@ -125,9 +213,30 @@ func TestChannelProcessor_KeyList(t *testing.T) {
 	}
 	keys, err := cp.KeyList()
 	if err != nil {
-		t.Error(`Error on value get`)
+		t.Error(`Error on KeyList`)
 	}
-	if !reflect.DeepEqual(keys, []string{`foo`, `meeeeeow`, `wtf`}) {
-		t.Error(`Incorrect KeyList returned value`)
+	if !compareSrtingSlice(keys, []string{`foo`, `meeeeeow`, `wtf`}) {
+		t.Errorf(`Incorrect KeyList returned value, got %#v`, keys)
 	}
+}
+
+func compareSrtingSlice(got []string, expected []string) bool {
+	if len(got) != len(expected) {
+		return false
+	}
+	m := 0
+	for _, s := range got {
+		for j, z := range expected {
+			if s == z {
+				m++
+				if j == len(expected)-1 {
+					expected = expected[:j]
+				} else {
+					expected = append(expected[:j], expected[j+1:]...)
+				}
+				break
+			}
+		}
+	}
+	return len(got) == m
 }

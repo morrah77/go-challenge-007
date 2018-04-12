@@ -4,6 +4,7 @@ package proc
 
 import (
 	"errors"
+	"strconv"
 	"time"
 )
 
@@ -23,15 +24,18 @@ type outputValue struct {
 type storedValue struct {
 	value   interface{}
 	created time.Time
+	Ttl     time.Duration
 }
 
 var ErrorKeyExists = errors.New(`Key already exists`)
 var ErrorKeyNotExists = errors.New(`Key does not exist`)
+var ErrorIncorrectTtlValue = errors.New(`Incorrect TTL value passed`)
 
 type ChannelProcessor struct {
 	chCreate chan inputValue
 	chGet    chan inputValue
 	chUpdate chan inputValue
+	chTtl    chan inputValue
 	chRemove chan inputValue
 	chList   chan inputValue
 	store    map[string]storedValue
@@ -43,6 +47,7 @@ func NewChannelProcessor(ttl time.Duration) *ChannelProcessor {
 		chCreate: make(chan inputValue, channelsCapacity),
 		chUpdate: make(chan inputValue, channelsCapacity),
 		chGet:    make(chan inputValue, channelsCapacity),
+		chTtl:    make(chan inputValue, channelsCapacity),
 		chRemove: make(chan inputValue, channelsCapacity),
 		chList:   make(chan inputValue, channelsCapacity),
 		store:    make(map[string]storedValue),
@@ -55,63 +60,15 @@ func (cp *ChannelProcessor) Start() {
 		for {
 			select {
 			case v := <-cp.chCreate:
-				if _, ok := cp.valueExistsAndNotOutdated(v.key); ok {
-					v.chResp <- outputValue{
-						value: nil,
-						err:   ErrorKeyExists,
-					}
-				} else {
-					cp.store[v.key] = storedValue{
-						value:   v.value,
-						created: time.Now(),
-					}
-					v.chResp <- outputValue{
-						value: nil,
-						err:   nil,
-					}
-				}
+				v.chResp <- cp.handleCreate(v)
 			case v := <-cp.chUpdate:
-				if _, ok := cp.valueExistsAndNotOutdated(v.key); !ok {
-					v.chResp <- outputValue{
-						value: nil,
-						err:   ErrorKeyNotExists,
-					}
-				} else {
-					cp.store[v.key] = storedValue{
-						value:   v.value,
-						created: time.Now(),
-					}
-					v.chResp <- outputValue{
-						value: nil,
-						err:   nil,
-					}
-				}
+				v.chResp <- cp.handleUpdate(v)
+			case v := <-cp.chTtl:
+				v.chResp <- cp.handleSetTtl(v)
 			case v := <-cp.chRemove:
-				if _, ok := cp.valueExistsAndNotOutdated(v.key); !ok {
-					v.chResp <- outputValue{
-						value: nil,
-						err:   ErrorKeyNotExists,
-					}
-				} else {
-					delete(cp.store, v.key)
-					v.chResp <- outputValue{
-						value: nil,
-						err:   nil,
-					}
-				}
+				v.chResp <- cp.handleRemove(v)
 			case v := <-cp.chGet:
-				value, ok := cp.valueExistsAndNotOutdated(v.key)
-				if !ok {
-					v.chResp <- outputValue{
-						value: nil,
-						err:   ErrorKeyNotExists,
-					}
-				} else {
-					v.chResp <- outputValue{
-						value: value.value,
-						err:   nil,
-					}
-				}
+				v.chResp <- cp.handleGet(v)
 			case v := <-cp.chList:
 				var keys []string
 				for key, sv := range cp.store {
@@ -135,11 +92,129 @@ func (cp *ChannelProcessor) valueExistsAndNotOutdated(key string) (storedValue, 
 	if !ok {
 		return sv, false
 	}
-	if !sv.created.Add(cp.ttl).After(time.Now()) {
+	ttl := sv.Ttl
+	if ttl == 0 {
+		ttl = cp.ttl
+	}
+	if !sv.created.Add(ttl).After(time.Now()) {
 		delete(cp.store, key)
 		return sv, false
 	}
 	return sv, true
+}
+
+func (cp *ChannelProcessor) handleGet(v inputValue) outputValue {
+	value, ok := cp.valueExistsAndNotOutdated(v.key)
+	if !ok {
+		return outputValue{
+			value: nil,
+			err:   ErrorKeyNotExists,
+		}
+	} else {
+		return outputValue{
+			value: value.value,
+			err:   nil,
+		}
+	}
+}
+
+func (cp *ChannelProcessor) handleCreate(v inputValue) outputValue {
+	if _, ok := cp.valueExistsAndNotOutdated(v.key); ok {
+		return outputValue{
+			value: nil,
+			err:   ErrorKeyExists,
+		}
+	} else {
+		cp.store[v.key] = storedValue{
+			value:   v.value,
+			created: time.Now(),
+		}
+		return outputValue{
+			value: nil,
+			err:   nil,
+		}
+	}
+}
+
+func (cp *ChannelProcessor) handleUpdate(v inputValue) outputValue {
+	if _, ok := cp.valueExistsAndNotOutdated(v.key); !ok {
+		return outputValue{
+			value: nil,
+			err:   ErrorKeyNotExists,
+		}
+	} else {
+		cp.store[v.key] = storedValue{
+			value:   v.value,
+			created: time.Now(),
+		}
+		return outputValue{
+			value: nil,
+			err:   nil,
+		}
+	}
+}
+
+func (cp *ChannelProcessor) handleRemove(v inputValue) outputValue {
+	if _, ok := cp.valueExistsAndNotOutdated(v.key); !ok {
+		return outputValue{
+			value: nil,
+			err:   ErrorKeyNotExists,
+		}
+	} else {
+		delete(cp.store, v.key)
+		return outputValue{
+			value: nil,
+			err:   nil,
+		}
+	}
+}
+
+func (cp *ChannelProcessor) handleSetTtl(v inputValue) outputValue {
+	sv, ok := cp.valueExistsAndNotOutdated(v.key)
+	if !ok {
+		return outputValue{
+			value: nil,
+			err:   ErrorKeyNotExists,
+		}
+	}
+	var (
+		vi  int
+		ttl time.Duration
+		err error
+	)
+	vs, ok := v.value.(string)
+	if ok {
+		ttl, err = time.ParseDuration(vs)
+		if err != nil {
+			vi, err = strconv.Atoi(vs)
+			if err == nil {
+				ttl = time.Second * time.Duration(vi)
+			}
+		}
+		if err != nil {
+			return outputValue{
+				value: nil,
+				err:   ErrorIncorrectTtlValue,
+			}
+		}
+	} else {
+		ttl, ok = v.value.(time.Duration)
+	}
+	if !ok {
+		return outputValue{
+			value: nil,
+			err:   ErrorIncorrectTtlValue,
+		}
+	}
+	cp.store[v.key] = storedValue{
+		value:   sv.value,
+		Ttl:     ttl,
+		created: time.Now(),
+	}
+	return outputValue{
+		value: nil,
+		err:   nil,
+	}
 }
 
 func (cp *ChannelProcessor) Create(key string, value interface{}) error {
@@ -170,6 +245,17 @@ func (cp *ChannelProcessor) Update(key string, value interface{}) error {
 		chResp: make(chan outputValue),
 	}
 	cp.chUpdate <- input
+	resp := <-input.chResp
+	return resp.err
+}
+
+func (cp *ChannelProcessor) SetTtl(key string, value interface{}) error {
+	input := inputValue{
+		key:    key,
+		value:  value,
+		chResp: make(chan outputValue),
+	}
+	cp.chTtl <- input
 	resp := <-input.chResp
 	return resp.err
 }

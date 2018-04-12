@@ -90,6 +90,14 @@ func processConnection(conn net.Conn, proc *proc.ChannelProcessor) {
 			} else {
 				conn.Write([]byte("OK\n"))
 			}
+		case `TTL`:
+			println(`TTL`)
+			err := proc.SetTtl(cmd.Key, cmd.Value)
+			if err != nil {
+				conn.Write([]byte(err.Error() + "\n"))
+			} else {
+				conn.Write([]byte("OK\n"))
+			}
 		case `Remove`:
 			println(`Remove`)
 			err := proc.Remove(cmd.Key)

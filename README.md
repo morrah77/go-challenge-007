@@ -1,5 +1,5 @@
 #In-memory concurrent key-value storagе (in-memory конкурентное key-value хранилище)
-
+in this branch: implement per-key TTL by adding new command like `TTL key_name 5` to set `key_name` TTL to 5s (доработать приложение так, чтобы TTL можно было задавать для каждого ключа индивидуально (добавить команду TTL, пример использования команды: `TTL key_name 5` - задаст TTL у ключа key_name в 5 секунд))
 ##Expected functionality (Ожидаемые функции)
  - TTL для ключа - фиксированное время, задается при старте сервиса.
 
@@ -10,6 +10,7 @@
  - Update
  - Remove
  - List of keys
+ - TTL
  
  ##Implemented
  
@@ -37,6 +38,12 @@
     -`Create foo bar`
     
     -`Update foo meow`
+    
+    -`TTL foo 1`
+    
+    -`TTL foo 1s`
+    
+    -`TTL foo 1000ms`
     
     -`Remove foo`
     
