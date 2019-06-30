@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/morrah77/go-challenge-007/proc"
+	"github.com/morrah77/kvstorage/proc"
 )
 
 type Conf struct {
